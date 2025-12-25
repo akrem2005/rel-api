@@ -300,7 +300,6 @@ app.post(
   async (req, res) => {
     const {
       name,
-      user_id,
       location,
       price,
       description,
@@ -316,7 +315,7 @@ app.post(
       roomQuota = 0,
     } = req.body;
 
-    if (!name || !location || !user_id || !price || !category || !listingType) {
+    if (!name || !location || !price || !category || !listingType) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -336,23 +335,38 @@ app.post(
             .json({ error: "No listing credits remaining" });
         }
 
-        const newCredits = req.subscription.credits_remaining - 1;
         await pool.query(
-          "UPDATE user_subscriptions SET credits_remaining = ? WHERE id = ?",
-          [newCredits, req.subscription.id]
+          "UPDATE user_subscriptions SET credits_remaining = credits_remaining - 1 WHERE id = ?",
+          [req.subscription.id]
         );
       }
 
       const [result] = await pool.query(
-        `INSERT INTO properties 
-        (name, location, price, user_id, description, category, listingType, bedrooms, bathrooms, area, images,
-         furnishingStatus, floorNumber, parkingSpaces, maxGuests, roomQuota, ownerId, isVerified)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+        `INSERT INTO properties (
           name,
           location,
           price,
           user_id,
+          description,
+          category,
+          listingType,
+          bedrooms,
+          bathrooms,
+          area,
+          images,
+          furnishingStatus,
+          floorNumber,
+          parkingSpaces,
+          maxGuests,
+          roomQuota,
+          ownerId,
+          isVerified
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          name,
+          location,
+          price,
+          ownerId,
           description || null,
           category,
           listingType,
@@ -370,32 +384,31 @@ app.post(
         ]
       );
 
-      const [newPropertyRows] = await pool.query(
-        "SELECT * FROM properties WHERE id = ?",
-        [result.insertId]
-      );
+      const [rows] = await pool.query("SELECT * FROM properties WHERE id = ?", [
+        result.insertId,
+      ]);
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
       let formattedImages = [];
-      if (newPropertyRows[0].images) {
-        try {
-          const parsed = JSON.parse(newPropertyRows[0].images);
-          formattedImages = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch (e) {}
-      }
 
-      const newProperty = {
-        ...newPropertyRows[0],
-        images: formattedImages,
-      };
+      if (rows[0].images) {
+        try {
+          formattedImages = JSON.parse(rows[0].images).map(
+            (img) => `${baseUrl}/uploads/${img}`
+          );
+        } catch {}
+      }
 
       res.status(201).json({
         message: "Property created successfully",
-        property: newProperty,
+        property: {
+          ...rows[0],
+          images: formattedImages,
+        },
       });
     } catch (err) {
       console.error("Error creating property:", err);
-      res.status(500).json({ error: "Server error: " + err.message });
+      res.status(500).json({ error: "Server error" });
     }
   }
 );
