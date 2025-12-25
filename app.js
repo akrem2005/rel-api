@@ -234,7 +234,7 @@ app.post(
   "/api/properties",
   authMiddleware,
   subscriptionMiddleware,
-  upload.array("images", 10),
+  upload.array("images", 10), // Now uses diskStorage with proper extensions
   async (req, res) => {
     const {
       name,
@@ -253,8 +253,15 @@ app.post(
       roomQuota = 0,
     } = req.body;
 
+    // Validate required fields
+    if (!name || !location || !price || !category || !listingType) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Extract uploaded filenames (now with extensions like .jpg, .png)
     const images = req.files ? req.files.map((f) => f.filename) : [];
     const imagesJson = JSON.stringify(images);
+
     const ownerId = req.user.id;
     const isVerified = ["admin", "agent", "hotel"].includes(req.user.role)
       ? 1
@@ -263,6 +270,12 @@ app.post(
     try {
       // Deduct 1 credit for agents
       if (req.user.role === "agent") {
+        if (req.subscription.credits_remaining <= 0) {
+          return res
+            .status(403)
+            .json({ error: "No listing credits remaining" });
+        }
+
         const newCredits = req.subscription.credits_remaining - 1;
         await pool.query(
           "UPDATE user_subscriptions SET credits_remaining = ? WHERE id = ?",
@@ -270,39 +283,75 @@ app.post(
         );
       }
 
-      await pool.query(
+      // Insert the new property
+      const [result] = await pool.query(
         `INSERT INTO properties 
-      (name, location, price, description, category, listingType, bedrooms, bathrooms, area, images,
-       furnishingStatus, floorNumber, parkingSpaces, maxGuests, roomQuota, ownerId, isVerified)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (name, location, price, description, category, listingType, bedrooms, bathrooms, area, images,
+         furnishingStatus, floorNumber, parkingSpaces, maxGuests, roomQuota, ownerId, isVerified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           name,
           location,
           price,
-          description,
+          description || null,
           category,
           listingType,
-          bedrooms,
-          bathrooms,
-          area,
+          bedrooms || null,
+          bathrooms || null,
+          area || null,
           imagesJson,
-          furnishingStatus,
-          floorNumber,
-          parkingSpaces,
-          maxGuests,
+          furnishingStatus || null,
+          floorNumber || null,
+          parkingSpaces || null,
+          maxGuests || null,
           roomQuota,
           ownerId,
           isVerified,
         ]
       );
 
-      res.status(201).json({ message: "Property created successfully" });
+      // Fetch the newly created property to return with full image URLs
+      const [newPropertyRows] = await pool.query(
+        "SELECT * FROM properties WHERE id = ?",
+        [result.insertId]
+      );
+
+      if (newPropertyRows.length === 0) {
+        return res
+          .status(500)
+          .json({ error: "Failed to retrieve created property" });
+      }
+
+      // Format images with full URLs
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      let formattedImages = [];
+      if (newPropertyRows[0].images) {
+        try {
+          const parsedImages = JSON.parse(newPropertyRows[0].images);
+          formattedImages = parsedImages.map(
+            (img) => `${baseUrl}/uploads/${img}`
+          );
+        } catch (e) {
+          formattedImages = [];
+        }
+      }
+
+      const newProperty = {
+        ...newPropertyRows[0],
+        images: formattedImages,
+      };
+
+      // Success response with the full property including image URLs
+      res.status(201).json({
+        message: "Property created successfully",
+        property: newProperty,
+      });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      console.error("Error creating property:", err);
+      res.status(500).json({ error: "Server error: " + err.message });
     }
   }
 );
-
 app.put(
   "/api/properties/:id",
   authMiddleware,
