@@ -537,6 +537,223 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
 // They remain the same as in your original code.
 
 // ... [All other endpoints you already have: favorites, profile, notifications, subscriptions, admin routes, apply, etc.]
+app.get("/api/bookings/my-bookings", authMiddleware, async (req, res) => {
+  const [rows] = await pool.query("SELECT * FROM bookings WHERE userId = ?", [
+    req.user.id,
+  ]);
+  res.json(rows);
+});
+
+app.get("/api/bookings/my-properties", authMiddleware, async (req, res) => {
+  const [rows] = await pool.query(
+    `SELECT b.* FROM bookings b JOIN properties p ON b.propertyId = p.id WHERE p.ownerId = ?`,
+    [req.user.id]
+  );
+  res.json(rows);
+});
+
+// 4. Favorites (unchanged)
+app.get("/api/favorites", authMiddleware, async (req, res) => {
+  const [rows] = await pool.query(
+    `SELECT p.* FROM properties p JOIN favorites f ON p.id = f.propertyId WHERE f.userId = ?`,
+    [req.user.id]
+  );
+  res.json(rows);
+});
+
+app.post("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
+  await pool.query(
+    "INSERT IGNORE INTO favorites (userId, propertyId) VALUES (?, ?)",
+    [req.user.id, req.params.propertyId]
+  );
+  res.json({ message: "Added to favorites" });
+});
+
+app.delete("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
+  await pool.query(
+    "DELETE FROM favorites WHERE userId = ? AND propertyId = ?",
+    [req.user.id, req.params.propertyId]
+  );
+  res.json({ message: "Removed from favorites" });
+});
+
+// 5. Profile & Notifications
+app.get("/api/profile", authMiddleware, async (req, res) => {
+  const [rows] = await pool.query(
+    "SELECT id, name, email, role FROM users WHERE id = ?",
+    [req.user.id]
+  );
+  res.json(rows[0]);
+});
+
+app.get("/api/notifications", authMiddleware, async (req, res) => {
+  const [rows] = await pool.query(
+    "SELECT * FROM notifications WHERE userId = ? ORDER BY createdAt DESC",
+    [req.user.id]
+  );
+  res.json(rows);
+});
+
+// My Subscription
+app.get("/api/my-subscription", authMiddleware, async (req, res) => {
+  if (["user", "admin"].includes(req.user.role)) return res.json(null);
+
+  const [rows] = await pool.query(
+    `SELECT us.credits_remaining, us.payment_status, sp.*
+     FROM user_subscriptions us
+     JOIN subscription_plans sp ON us.planId = sp.planId
+     WHERE us.userId = ? AND us.is_active = TRUE`,
+    [req.user.id]
+  );
+  res.json(rows[0] || null);
+});
+
+// Admin: Subscription Plans
+app.get(
+  "/api/admin/plans",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const [rows] = await pool.query("SELECT * FROM subscription_plans");
+    res.json(rows);
+  }
+);
+
+app.post(
+  "/api/admin/plans",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const {
+      name,
+      role,
+      price_per_month = 0,
+      revenue_share_percent = 0,
+      listing_credits = 0,
+      free_months = 0,
+      description,
+    } = req.body;
+    await pool.query(
+      "INSERT INTO subscription_plans (name, role, price_per_month, revenue_share_percent, listing_credits, free_months, description) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [
+        name,
+        role,
+        price_per_month,
+        revenue_share_percent,
+        listing_credits,
+        free_months,
+        description,
+      ]
+    );
+    res.status(201).json({ message: "Plan created" });
+  }
+);
+
+// Admin: Assign subscription after approval
+app.post(
+  "/api/admin/assign-subscription",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const { userId, planId } = req.body;
+
+    const [plan] = await pool.query(
+      "SELECT * FROM subscription_plans WHERE id = ?",
+      [planId]
+    );
+    if (plan.length === 0)
+      return res.status(404).json({ error: "Plan not found" });
+
+    // Deactivate old
+    await pool.query(
+      "UPDATE user_subscriptions SET is_active = FALSE WHERE userId = ?",
+      [userId]
+    );
+
+    const startDate = new Date().toISOString().slice(0, 10);
+    await pool.query(
+      'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status) VALUES (?, ?, ?, ?, "free_trial")',
+      [userId, planId, startDate, plan[0].listing_credits]
+    );
+
+    res.json({ message: "Subscription assigned with free trial" });
+  }
+);
+
+// Agent/Hotel Application
+app.post("/api/apply", async (req, res) => {
+  const { name, email, role } = req.body;
+  if (!["agent", "hotel"].includes(role))
+    return res.status(400).json({ error: "Invalid role" });
+
+  try {
+    await pool.query(
+      "INSERT IGNORE INTO applications (name, email, role) VALUES (?, ?, ?)",
+      [name, email, role]
+    );
+    res.json({ message: "Application submitted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get(
+  "/api/admin/applications",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const [rows] = await pool.query(
+      'SELECT * FROM applications WHERE status = "pending"'
+    );
+    res.json(rows);
+  }
+);
+
+app.put(
+  "/api/admin/applications/:id/approve",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const { id } = req.params;
+    const { planId } = req.body; // Admin chooses which plan to assign
+
+    const [app] = await pool.query(
+      'SELECT * FROM applications WHERE id = ? AND status = "pending"',
+      [id]
+    );
+    if (app.length === 0)
+      return res.status(400).json({ error: "Invalid application" });
+
+    const password = Math.random().toString(36).slice(-10);
+    const hashed = await bcrypt.hash(password, 10);
+
+    const [userResult] = await pool.query(
+      "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
+      [app[0].name, app[0].email, hashed, app[0].role]
+    );
+
+    // Assign subscription
+    if (planId) {
+      await pool.query(
+        'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status) VALUES (?, ?, CURDATE(), (SELECT listing_credits FROM subscription_plans WHERE id = ?), "free_trial")',
+        [userResult.insertId, planId, planId]
+      );
+    }
+
+    await pool.query(
+      'UPDATE applications SET status = "approved" WHERE id = ?',
+      [id]
+    );
+
+    transporter.sendMail({
+      to: app[0].email,
+      subject: "Application Approved - Real Estate Portal",
+      text: `Welcome! Your account has been approved.\nEmail: ${app[0].email}\nPassword: ${password}\nPlease change your password after login.`,
+    });
+
+    res.json({ message: "User created and notified" });
+  }
+);
 
 app.listen(port, () => {
   console.log(`Real Estate API running on http://localhost:${port}`);
