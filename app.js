@@ -300,6 +300,7 @@ app.post(
   async (req, res) => {
     const {
       name,
+      user_id,
       location,
       price,
       description,
@@ -315,7 +316,7 @@ app.post(
       roomQuota = 0,
     } = req.body;
 
-    if (!name || !location || !price || !category || !listingType) {
+    if (!name || !location || user_id || !price || !category || !listingType) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -344,13 +345,14 @@ app.post(
 
       const [result] = await pool.query(
         `INSERT INTO properties 
-        (name, location, price, description, category, listingType, bedrooms, bathrooms, area, images,
+        (name, location, price, user_id, description, category, listingType, bedrooms, bathrooms, area, images,
          furnishingStatus, floorNumber, parkingSpaces, maxGuests, roomQuota, ownerId, isVerified)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           name,
           location,
           price,
+          user_id,
           description || null,
           category,
           listingType,
