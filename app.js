@@ -316,7 +316,7 @@ app.post(
       roomQuota = 0,
     } = req.body;
 
-    if (!name || !location || user_id || !price || !category || !listingType) {
+    if (!name || !location || !user_id || !price || !category || !listingType) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
