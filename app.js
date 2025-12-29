@@ -461,7 +461,7 @@ app.delete(
 app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT * FROM properties WHERE ownerId = ?",
+      "SELECT * FROM properties WHERE userId = ?",
       [req.user.id]
     );
 
