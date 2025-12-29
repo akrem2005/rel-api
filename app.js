@@ -412,6 +412,60 @@ app.post(
     }
   }
 );
+// MUST come before /:id
+app.get("/api/properties/my-listings", async (req, res) => {
+  try {
+    const userId = Number(req.headers["x-user-id"]);
+
+    if (!userId) {
+      return res.status(400).json({ error: "Missing x-user-id header" });
+    }
+
+    const [rows] = await pool.query(
+      "SELECT * FROM properties WHERE ownerId = ?",
+      [userId]
+    );
+
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const formatted = rows.map((prop) => {
+      let images = [];
+      if (prop.images) {
+        try {
+          const parsed = JSON.parse(prop.images);
+          images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
+        } catch {}
+      }
+      return { ...prop, images };
+    });
+
+    res.json(formatted);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// AFTER specific routes
+app.get("/api/properties/:id", async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT * FROM properties WHERE id = ?", [
+      req.params.id,
+    ]);
+    if (rows.length === 0) return res.status(404).json({ error: "Not found" });
+
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    let images = [];
+    if (rows[0].images) {
+      try {
+        const parsed = JSON.parse(rows[0].images);
+        images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
+      } catch {}
+    }
+
+    res.json({ ...rows[0], images });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // UPDATE PROPERTY (basic version - you can expand later)
 app.put(
@@ -457,37 +511,6 @@ app.delete(
     }
   }
 );
-
-app.get("/api/properties/my-listings", async (req, res) => {
-  try {
-    const userId = Number(req.headers["x-user-id"]);
-
-    if (!userId) {
-      return res.status(400).json({ error: "Missing x-user-id header" });
-    }
-
-    const [rows] = await pool.query(
-      "SELECT * FROM properties WHERE ownerId = ?",
-      [userId]
-    );
-
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
-    const formatted = rows.map((prop) => {
-      let images = [];
-      if (prop.images) {
-        try {
-          const parsed = JSON.parse(prop.images);
-          images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch (e) {}
-      }
-      return { ...prop, images };
-    });
-
-    res.json(formatted);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // === Remaining endpoints unchanged (Bookings, Favorites, etc.) ===
 app.post("/api/bookings", authMiddleware, async (req, res) => {
