@@ -458,11 +458,17 @@ app.delete(
   }
 );
 
-app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
+app.get("/api/properties/my-listings", async (req, res) => {
   try {
+    const userId = Number(req.headers["x-user-id"]);
+
+    if (!userId) {
+      return res.status(400).json({ error: "Missing x-user-id header" });
+    }
+
     const [rows] = await pool.query(
       "SELECT * FROM properties WHERE ownerId = ?",
-      [req.user.id]
+      [userId]
     );
 
     const baseUrl = `${req.protocol}://${req.get("host")}`;
