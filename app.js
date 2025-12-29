@@ -78,9 +78,28 @@ const createReviewsTable = async () => {
         console.log("Reviews table ready");
     } catch (err) {
         console.error("Error creating reviews table:", err);
+    } catch (err) {
+        console.error("Error creating reviews table:", err);
+    }
+};
+// Database Migration: Add 'rating' column to properties if missing
+const checkSchema = async () => {
+    try {
+        // Check if rating column exists
+        const [columns] = await pool.query("SHOW COLUMNS FROM properties LIKE 'rating'");
+        if (columns.length === 0) {
+            console.log("Adding 'rating' column to properties table...");
+            await pool.query("ALTER TABLE properties ADD COLUMN rating DOUBLE DEFAULT 0");
+            console.log("'rating' column added successfully.");
+        } else {
+            console.log("'rating' column already exists.");
+        }
+    } catch (err) {
+        console.error("Schema check error:", err);
     }
 };
 createReviewsTable();
+checkSchema();
 const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: {
