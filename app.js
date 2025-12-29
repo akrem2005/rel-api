@@ -267,7 +267,45 @@ app.get("/api/properties", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
+  try {
+    console.log("Hit /my-listings route"); // Check if route is reached
+    console.log("Authenticated user:", req.user); // Check user info from JWT
 
+    const userId = req.user.id;
+    console.log("Fetching properties for userId:", userId);
+
+    const [rows] = await pool.query(
+      "SELECT * FROM properties WHERE ownerId = ?",
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      console.log("No properties found for this user");
+      return res.status(404).json({ error: "No properties found" });
+    }
+
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const formatted = rows.map((prop) => {
+      let images = [];
+      if (prop.images) {
+        try {
+          const parsed = JSON.parse(prop.images);
+          images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
+        } catch (e) {
+          console.log("Error parsing images:", e);
+        }
+      }
+      return { ...prop, images };
+    });
+
+    console.log("Found properties:", formatted.length);
+    res.json(formatted);
+  } catch (err) {
+    console.log("Error in /my-listings:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // GET SINGLE PROPERTY
 app.get("/api/properties/:id", async (req, res) => {
   try {
@@ -412,33 +450,6 @@ app.post(
     }
   }
 );
-// Get all properties of the logged-in user
-app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id; // Use the token-authenticated user
-
-    const [rows] = await pool.query(
-      "SELECT * FROM properties WHERE ownerId = ?",
-      [userId]
-    );
-
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
-    const formatted = rows.map((prop) => {
-      let images = [];
-      if (prop.images) {
-        try {
-          const parsed = JSON.parse(prop.images);
-          images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch {}
-      }
-      return { ...prop, images };
-    });
-
-    res.json(formatted);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // AFTER specific routes
 app.get("/api/properties/:id", async (req, res) => {
