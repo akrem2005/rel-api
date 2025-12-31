@@ -536,50 +536,50 @@ app.put(
     }
   }
 );
-// RATE PROPERTY
+
+// -------------------- RATE PROPERTY --------------------
 app.post("/api/properties/:id/rate", authMiddleware, async (req, res) => {
   const { rating, comment } = req.body;
   const propertyId = req.params.id;
-  const userId = req.user.id; // From authMiddleware
-  if (!rating || rating < 1 || rating > 5) {
-    return res.status(400).json({ error: "Rating must be between 1 and 5" });
-  }
-  try {
-    // 1. Check if user already rated this property
-    const [existing] = await pool.query(
-      "SELECT * FROM reviews WHERE propertyId = ? AND userId = ?",
-      [propertyId, userId]
-    );
-    if (existing.length > 0) {
-      // Update existing review
-      await pool.query(
-        "UPDATE reviews SET rating = ?, comment = ?, createdAt = CURRENT_TIMESTAMP WHERE id = ?",
-        [rating, comment || null, existing[0].id]
-      );
-    } else {
-      // Insert new review
-      await pool.query(
-        "INSERT INTO reviews (propertyId, userId, rating, comment) VALUES (?, ?, ?, ?)",
-        [propertyId, userId, rating, comment || null]
-      );
-    }
-    // 2. Calculate new average rating
-    const [avgResult] = await pool.query(
-      "SELECT AVG(rating) as avgRating FROM reviews WHERE propertyId = ?",
-      [propertyId]
-    );
-    const newRating = avgResult[0].avgRating || 0;
-    // 3. Update property table
-    await pool.query("UPDATE properties SET rating = ? WHERE id = ?", [
-      newRating,
-      propertyId,
-    ]);
-    res.json({ message: "Rating submitted successfully", newRating });
-  } catch (err) {
-    console.error("Rating Error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  const userId = req.user.id;
+
+  if (rating < 1 || rating > 5)
+    return res.status(400).json({ error: "Rating must be 1–5" });
+
+  await pool.query(
+    `INSERT INTO reviews (propertyId, userId, rating, comment)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       rating = VALUES(rating),
+       comment = VALUES(comment),
+       createdAt = CURRENT_TIMESTAMP`,
+    [propertyId, userId, rating, comment || null]
+  );
+
+  const [avg] = await pool.query(
+    "SELECT AVG(rating) AS rating FROM reviews WHERE propertyId=?",
+    [propertyId]
+  );
+
+  res.json({
+    message: "Review saved",
+    rating: Number(avg[0].rating).toFixed(1),
+  });
 });
+
+// -------------------- REVIEWS LIST --------------------
+app.get("/api/properties/:id/reviews", async (req, res) => {
+  const [rows] = await pool.query(
+    `SELECT r.*, u.name
+     FROM reviews r
+     JOIN users u ON r.userId = u.id
+     WHERE r.propertyId = ?
+     ORDER BY r.createdAt DESC`,
+    [req.params.id]
+  );
+  res.json(rows);
+});
+
 // DELETE PROPERTY
 app.delete(
   "/api/properties/:id",
