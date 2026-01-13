@@ -14,11 +14,13 @@ const app = express();
 const port = 3000;
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
+
 // === Create uploads folder if it doesn't exist ===
 if (!fs.existsSync("uploads")) {
   fs.mkdirSync("uploads");
   console.log("Created 'uploads' directory");
 }
+
 // === Multer Configuration with Proper Filenames & Extensions ===
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -34,6 +36,7 @@ const storage = multer.diskStorage({
     cb(null, uniqueName);
   },
 });
+
 const upload = multer({
   storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max per file
@@ -52,6 +55,7 @@ const upload = multer({
     }
   },
 });
+
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -60,9 +64,11 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
 });
-// Create reviews table if it doesn't exist
-const createReviewsTable = async () => {
+
+// Ensure database schema is up to date
+const ensureSchema = async () => {
   try {
+    // Create reviews table if it doesn't exist
     await pool.query(`
             CREATE TABLE IF NOT EXISTS reviews (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -76,11 +82,23 @@ const createReviewsTable = async () => {
             )
         `);
     console.log("Reviews table ready");
+
+    // Ensure rating column exists in properties table
+    const [columns] = await pool.query(
+      "SHOW COLUMNS FROM properties LIKE 'rating'"
+    );
+    if (columns.length === 0) {
+      await pool.query(
+        "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0"
+      );
+      console.log("Added rating column to properties table");
+    }
   } catch (err) {
-    console.error("Error creating reviews table:", err);
+    console.error("Error ensuring database schema:", err);
   }
 };
-createReviewsTable();
+ensureSchema();
+
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -88,6 +106,7 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS,
   },
 });
+
 // Middleware
 const authMiddleware = async (req, res, next) => {
   const token = req.header("Authorization")?.replace("Bearer ", "");
@@ -100,11 +119,13 @@ const authMiddleware = async (req, res, next) => {
     res.status(400).json({ error: "Invalid Token" });
   }
 };
+
 const adminMiddleware = (req, res, next) => {
   if (req.user.role !== "admin")
     return res.status(403).json({ error: "Admin access required" });
   next();
 };
+
 const ownerMiddleware = async (req, res, next) => {
   const [rows] = await pool.query(
     "SELECT ownerId FROM properties WHERE id = ?",
@@ -116,6 +137,7 @@ const ownerMiddleware = async (req, res, next) => {
   }
   next();
 };
+
 const subscriptionMiddleware = async (req, res, next) => {
   if (req.user.role === "user" || req.user.role === "admin") return next();
   try {
@@ -155,6 +177,7 @@ const subscriptionMiddleware = async (req, res, next) => {
     res.status(500).json({ error: err.message });
   }
 };
+
 // 1. Authentication
 app.post("/api/auth/register", async (req, res) => {
   const { name, email, password, role = "user" } = req.body;
@@ -183,6 +206,7 @@ app.post("/api/auth/register", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -211,6 +235,7 @@ app.post("/api/auth/login", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // GET AGENT DETAILS (Client-side fetch)
 app.get("/api/users/:id/agent-details", async (req, res) => {
   try {
@@ -241,10 +266,11 @@ app.get("/api/users/:id/agent-details", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // 2. Property Management - LIST ALL
 app.get("/api/properties", async (req, res) => {
   let query =
-    "SELECT p.*, u.name as ownerName FROM properties p JOIN users u ON p.ownerId = u.id WHERE 1=1";
+    "SELECT p.*, u.name as ownerName, (SELECT AVG(rating) FROM reviews WHERE propertyId = p.id) as rating, (SELECT COUNT(*) FROM reviews WHERE propertyId = p.id) as reviewCount FROM properties p JOIN users u ON p.ownerId = u.id WHERE 1=1";
   const params = [];
   const filters = [
     "category",
@@ -256,6 +282,8 @@ app.get("/api/properties", async (req, res) => {
     "bathrooms",
     "search",
     "isVerified",
+    "limit",
+    "offset",
   ];
   filters.forEach((f) => {
     if (req.query[f]) {
@@ -266,9 +294,18 @@ app.get("/api/properties", async (req, res) => {
         query += " AND (p.name LIKE ? OR p.location LIKE ?)";
       else query += ` AND p.${f} = ?`;
       if (f === "search") params.push(`%${req.query[f]}%`, `%${req.query[f]}%`);
-      else params.push(req.query[f]);
+      else if (f !== "limit" && f !== "offset") params.push(req.query[f]);
     }
   });
+
+  if (req.query.limit) {
+    query += " LIMIT ?";
+    params.push(parseInt(req.query.limit));
+  }
+  if (req.query.offset) {
+    query += " OFFSET ?";
+    params.push(parseInt(req.query.offset));
+  }
   try {
     const [rows] = await pool.query(query, params);
     // Format image URLs for all properties
@@ -288,21 +325,15 @@ app.get("/api/properties", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
   try {
-    console.log("Hit /my-listings route"); // Check if route is reached
-    console.log("Authenticated user:", req.user); // Check user info from JWT
+    console.log("Hit /my-listings route");
     const userId = req.user.id;
-    console.log("Fetching properties for userId:", userId);
     const [rows] = await pool.query(
-      "SELECT p.*, u.name as ownerName FROM properties p JOIN users u ON p.ownerId = u.id WHERE p.ownerId = ?",
+      "SELECT p.*, u.name as ownerName, (SELECT AVG(rating) FROM reviews WHERE propertyId = p.id) as rating, (SELECT COUNT(*) FROM reviews WHERE propertyId = p.id) as reviewCount FROM properties p JOIN users u ON p.ownerId = u.id WHERE p.ownerId = ?",
       [userId]
     );
-    if (rows.length === 0) {
-      console.log("No properties found for this user");
-      // Return empty array instead of 404
-      return res.json([]);
-    }
     const baseUrl = `${req.protocol}://${req.get("host")}`;
     const formatted = rows.map((prop) => {
       let images = [];
@@ -310,24 +341,21 @@ app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
         try {
           const parsed = JSON.parse(prop.images);
           images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch (e) {
-          console.log("Error parsing images:", e);
-        }
+        } catch (e) {}
       }
       return { ...prop, images };
     });
-    console.log("Found properties:", formatted.length);
     res.json(formatted);
   } catch (err) {
-    console.log("Error in /my-listings:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
 // GET SINGLE PROPERTY
 app.get("/api/properties/:id", async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT p.*, u.name as ownerName FROM properties p JOIN users u ON p.ownerId = u.id WHERE p.id = ?",
+      "SELECT p.*, u.name as ownerName, (SELECT AVG(rating) FROM reviews WHERE propertyId = p.id) as rating, (SELECT COUNT(*) FROM reviews WHERE propertyId = p.id) as reviewCount FROM properties p JOIN users u ON p.ownerId = u.id WHERE p.id = ?",
       [req.params.id]
     );
     if (rows.length === 0) return res.status(404).json({ error: "Not found" });
@@ -344,6 +372,7 @@ app.get("/api/properties/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // CREATE PROPERTY
 app.post(
   "/api/properties",
@@ -455,9 +484,7 @@ app.post(
     }
   }
 );
-// ------------------------------------------------------------------
-// XXX. UPDATE PROPERTY (FIXED IMPLEMENTATION)
-// ------------------------------------------------------------------
+
 app.put(
   "/api/properties/:id",
   authMiddleware,
@@ -482,28 +509,20 @@ app.put(
         maxGuests,
         existingImages,
       } = req.body;
-      // 1. Handle Images
       let finalImages = [];
-      // a) Process existing images (sent as JSON string of URLs or just filename)
       if (existingImages) {
         try {
           const rawList = JSON.parse(existingImages);
           finalImages = rawList.map((imgStr) => {
-            // If it's a URL, extract filename; if it's already a filename, keep it.
             const parts = imgStr.split("/");
             return parts[parts.length - 1];
           });
-        } catch (e) {
-          console.error("Error parsing existingImages:", e);
-        }
+        } catch (e) {}
       }
-      // b) Process new uploaded files
       if (req.files && req.files.length > 0) {
         const newFiles = req.files.map((f) => f.filename);
         finalImages = [...finalImages, ...newFiles];
       }
-      // 2. Update Database
-      // Note: Using JSON.stringify for the MySQL JSON column (or text column storing JSON)
       const imagesJson = JSON.stringify(finalImages);
       await pool.query(
         `UPDATE properties SET 
@@ -531,53 +550,64 @@ app.put(
       );
       res.json({ message: "Property updated successfully" });
     } catch (err) {
-      console.error("Update Error:", err);
       res.status(500).json({ error: err.message });
     }
   }
 );
 
-// -------------------- RATE PROPERTY --------------------
+// RATE PROPERTY
 app.post("/api/properties/:id/rate", authMiddleware, async (req, res) => {
   const { rating, comment } = req.body;
   const propertyId = req.params.id;
   const userId = req.user.id;
+  if (!rating || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: "Rating must be between 1 and 5" });
+  }
+  try {
+    const [existing] = await pool.query(
+      "SELECT * FROM reviews WHERE propertyId = ? AND userId = ?",
+      [propertyId, userId]
+    );
+    if (existing.length > 0) {
+      await pool.query(
+        "UPDATE reviews SET rating = ?, comment = ?, createdAt = CURRENT_TIMESTAMP WHERE id = ?",
+        [rating, comment || null, existing[0].id]
+      );
+    } else {
+      await pool.query(
+        "INSERT INTO reviews (propertyId, userId, rating, comment) VALUES (?, ?, ?, ?)",
+        [propertyId, userId, rating, comment || null]
+      );
+    }
+    const [avgResult] = await pool.query(
+      "SELECT AVG(rating) as avgRating FROM reviews WHERE propertyId = ?",
+      [propertyId]
+    );
+    const newRating = avgResult[0].avgRating || 0;
 
-  if (rating < 1 || rating > 5)
-    return res.status(400).json({ error: "Rating must be 1–5" });
-
-  await pool.query(
-    `INSERT INTO reviews (propertyId, userId, rating, comment)
-     VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       rating = VALUES(rating),
-       comment = VALUES(comment),
-       createdAt = CURRENT_TIMESTAMP`,
-    [propertyId, userId, rating, comment || null]
-  );
-
-  const [avg] = await pool.query(
-    "SELECT AVG(rating) AS rating FROM reviews WHERE propertyId=?",
-    [propertyId]
-  );
-
-  res.json({
-    message: "Review saved",
-    rating: Number(avg[0].rating).toFixed(1),
-  });
+    // Update property table (Ensuring column exists via ensureSchema)
+    await pool.query("UPDATE properties SET rating = ? WHERE id = ?", [
+      newRating,
+      propertyId,
+    ]);
+    res.json({ message: "Rating submitted successfully", newRating });
+  } catch (err) {
+    console.error("Rating Error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// -------------------- REVIEWS LIST --------------------
-app.get("/api/properties/:id/reviews", async (req, res) => {
-  const [rows] = await pool.query(
-    `SELECT r.*, u.name
-     FROM reviews r
-     JOIN users u ON r.userId = u.id
-     WHERE r.propertyId = ?
-     ORDER BY r.createdAt DESC`,
-    [req.params.id]
-  );
-  res.json(rows);
+// GET PROPERTY RATINGS/REVIEWS
+app.get("/api/properties/:id/ratings", async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT r.*, u.name as userName FROM reviews r JOIN users u ON r.userId = u.id WHERE r.propertyId = ? ORDER BY r.createdAt DESC",
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // DELETE PROPERTY
@@ -607,7 +637,7 @@ app.delete(
     }
   }
 );
-// === Remaining endpoints unchanged (Bookings, Favorites, etc.) ===
+
 app.post("/api/bookings", authMiddleware, async (req, res) => {
   const { propertyId, checkInDate, checkOutDate, guestsCount, paymentMethod } =
     req.body;
@@ -663,15 +693,14 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// Keep the rest of your endpoints (favorites, profile, subscriptions, admin, etc.)
-// They remain the same as in your original code.
-// ... [All other endpoints you already have: favorites, profile, notifications, subscriptions, admin routes, apply, etc.]
+
 app.get("/api/bookings/my-bookings", authMiddleware, async (req, res) => {
   const [rows] = await pool.query("SELECT * FROM bookings WHERE userId = ?", [
     req.user.id,
   ]);
   res.json(rows);
 });
+
 app.get("/api/bookings/my-properties", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT b.* FROM bookings b JOIN properties p ON b.propertyId = p.id WHERE p.ownerId = ?`,
@@ -679,6 +708,7 @@ app.get("/api/bookings/my-properties", authMiddleware, async (req, res) => {
   );
   res.json(rows);
 });
+
 // 4. Favorites
 app.get("/api/favorites", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
@@ -687,6 +717,7 @@ app.get("/api/favorites", authMiddleware, async (req, res) => {
   );
   res.json(rows);
 });
+
 app.post("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
   await pool.query(
     "INSERT IGNORE INTO favorites (userId, propertyId) VALUES (?, ?)",
@@ -694,6 +725,7 @@ app.post("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
   );
   res.json({ message: "Added to favorites" });
 });
+
 app.delete("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
   await pool.query(
     "DELETE FROM favorites WHERE userId = ? AND propertyId = ?",
@@ -701,6 +733,7 @@ app.delete("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
   );
   res.json({ message: "Removed from favorites" });
 });
+
 // 5. Profile & Notifications
 app.get("/api/profile", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
@@ -709,6 +742,7 @@ app.get("/api/profile", authMiddleware, async (req, res) => {
   );
   res.json(rows[0]);
 });
+
 app.get("/api/notifications", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
     "SELECT * FROM notifications WHERE userId = ? ORDER BY createdAt DESC",
@@ -716,7 +750,7 @@ app.get("/api/notifications", authMiddleware, async (req, res) => {
   );
   res.json(rows);
 });
-// My Subscription
+
 app.get("/api/my-subscription", authMiddleware, async (req, res) => {
   if (["user", "admin"].includes(req.user.role)) return res.json(null);
   const [rows] = await pool.query(
@@ -728,7 +762,7 @@ app.get("/api/my-subscription", authMiddleware, async (req, res) => {
   );
   res.json(rows[0] || null);
 });
-// Admin: Subscription Plans
+
 app.get(
   "/api/admin/plans",
   authMiddleware,
@@ -738,6 +772,7 @@ app.get(
     res.json(rows);
   }
 );
+
 app.post(
   "/api/admin/plans",
   authMiddleware,
@@ -767,7 +802,7 @@ app.post(
     res.status(201).json({ message: "Plan created" });
   }
 );
-// Admin: Assign subscription after approval
+
 app.post(
   "/api/admin/assign-subscription",
   authMiddleware,
@@ -780,7 +815,6 @@ app.post(
     );
     if (plan.length === 0)
       return res.status(404).json({ error: "Plan not found" });
-    // Deactivate old
     await pool.query(
       "UPDATE user_subscriptions SET is_active = FALSE WHERE userId = ?",
       [userId]
@@ -793,7 +827,7 @@ app.post(
     res.json({ message: "Subscription assigned with free trial" });
   }
 );
-// Agent/Hotel Application
+
 app.post("/api/apply", async (req, res) => {
   const { name, email, role } = req.body;
   if (!["agent", "hotel"].includes(role))
@@ -808,6 +842,7 @@ app.post("/api/apply", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.get(
   "/api/admin/applications",
   authMiddleware,
@@ -819,13 +854,14 @@ app.get(
     res.json(rows);
   }
 );
+
 app.put(
   "/api/admin/applications/:id/approve",
   authMiddleware,
   adminMiddleware,
   async (req, res) => {
     const { id } = req.params;
-    const { planId } = req.body; // Admin chooses which plan to assign
+    const { planId } = req.body;
     const [app] = await pool.query(
       'SELECT * FROM applications WHERE id = ? AND status = "pending"',
       [id]
@@ -838,7 +874,6 @@ app.put(
       "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
       [app[0].name, app[0].email, hashed, app[0].role]
     );
-    // Assign subscription
     if (planId) {
       await pool.query(
         'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status) VALUES (?, ?, CURDATE(), (SELECT listing_credits FROM subscription_plans WHERE id = ?), "free_trial")',
@@ -857,7 +892,7 @@ app.put(
     res.json({ message: "User created and notified" });
   }
 );
+
 app.listen(port, () => {
   console.log(`Real Estate API running on http://localhost:${port}`);
-  console.log(`Images served at http://localhost:${port}/uploads/filename.jpg`);
 });
