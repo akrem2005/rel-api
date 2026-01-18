@@ -251,19 +251,16 @@ app.post("/api/auth/login", async (req, res) => {
 
 // Email Transporter Configuration
 // Reverting to Port 465 (SSL/TLS) as per user settings
+// Email Transporter Configuration
+// Using Gmail Service (Requires App Password)
 const transporter = nodemailer.createTransport({
-  host: "mail.afrisoftware.et",
-  port: 465,
-  secure: true, // true for 465
+  service: "gmail",
   auth: {
-    user: "app@afrisoftware.et",
-    pass: process.env.SMTP_PASS,
+    user: process.env.SMTP_USER, // Your Gmail address
+    pass: process.env.SMTP_PASS, // Your Gmail App Password
   },
-  tls: {
-    rejectUnauthorized: false, // Trust self-signed certs
-  },
-  debug: true, // Show debug info
-  logger: true, // Log to console
+  debug: true,
+  logger: true,
 });
 
 // Forgot Password - Generate OTP
@@ -287,7 +284,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     // Send Email
     await transporter.sendMail({
-      from: '"Real Estate App" <app@afrisoftware.et>',
+      from: `"Real Estate App" <${process.env.SMTP_USER}>`,
       to: email,
       subject: "Password Reset Code",
       text: `Your password reset code is: ${otp}\nIt expires in 1 hour.`,
