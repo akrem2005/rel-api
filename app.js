@@ -97,6 +97,10 @@ const ensureSchema = async () => {
       );
       console.log("Added reset_token and reset_expires columns to users table");
     }
+
+    const [columns] = await pool.query(
+      "SHOW COLUMNS FROM properties LIKE 'rating'"
+    );
     if (columns.length === 0) {
       await pool.query(
         "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0"
