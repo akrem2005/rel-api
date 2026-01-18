@@ -144,7 +144,7 @@ const subscriptionMiddleware = async (req, res, next) => {
     const [subs] = await pool.query(
       `SELECT us.*, sp.listing_credits, sp.price_per_month, sp.revenue_share_percent, sp.free_months
        FROM user_subscriptions us
-       JOIN subscription_plans sp ON us.planId = sp.planId
+       JOIN subscription_plans sp ON us.planId = sp.id
        WHERE us.userId = ? AND us.is_active = TRUE
        LIMIT 1`,
       [req.user.id]
@@ -662,7 +662,7 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
       }
     }
     const [bookingResult] = await pool.query(
-      "INSERT INTO bookings (propertyId, userId, checkInDate, checkOutDate, guestsCount, paymentMethod) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO bookings (propertyId, userId, checkInDate, checkOutDate, guestsCount, paymentMethod, totalPrice) VALUES (?, ?, ?, ?, ?, ?, ?)",
       [
         propertyId,
         userId,
@@ -670,10 +670,11 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
         checkOutDate,
         guestsCount,
         paymentMethod,
+        req.body.totalPrice || property.price,
       ]
     );
     const [sub] = await pool.query(
-      "SELECT sp.revenue_share_percent FROM user_subscriptions us JOIN subscription_plans sp ON us.planId = sp.planId WHERE us.userId = ? AND us.is_active = TRUE",
+      "SELECT sp.revenue_share_percent FROM user_subscriptions us JOIN subscription_plans sp ON us.planId = sp.id WHERE us.userId = ? AND us.is_active = TRUE",
       [property.ownerId]
     );
     if (sub.length > 0 && sub[0].revenue_share_percent > 0) {
@@ -695,15 +696,22 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
 });
 
 app.get("/api/bookings/my-bookings", authMiddleware, async (req, res) => {
-  const [rows] = await pool.query("SELECT * FROM bookings WHERE userId = ?", [
-    req.user.id,
-  ]);
+  const [rows] = await pool.query(
+    `SELECT b.*, p.name as propertyName, p.images as propertyImages 
+     FROM bookings b 
+     JOIN properties p ON b.propertyId = p.id 
+     WHERE b.userId = ?`,
+    [req.user.id]
+  );
   res.json(rows);
 });
 
 app.get("/api/bookings/my-properties", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
-    `SELECT b.* FROM bookings b JOIN properties p ON b.propertyId = p.id WHERE p.ownerId = ?`,
+    `SELECT b.*, p.name as propertyName, p.images as propertyImages 
+     FROM bookings b 
+     JOIN properties p ON b.propertyId = p.id 
+     WHERE p.ownerId = ?`,
     [req.user.id]
   );
   res.json(rows);
@@ -756,7 +764,7 @@ app.get("/api/my-subscription", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT us.credits_remaining, us.payment_status, sp.*
      FROM user_subscriptions us
-     JOIN subscription_plans sp ON us.planId = sp.planId
+     JOIN subscription_plans sp ON us.planId = sp.id
      WHERE us.userId = ? AND us.is_active = TRUE`,
     [req.user.id]
   );
