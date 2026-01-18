@@ -84,24 +84,22 @@ const ensureSchema = async () => {
     console.log("Reviews table ready");
 
     // Ensure rating column exists in properties table
-    const [columns] = await pool.query(
-      "SHOW COLUMNS FROM properties LIKE 'rating'"
-    );
+    // Add reset_token and reset_expires to users if not valid
+    const [userCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'reset_token'");
+    if (userCols.length === 0) {
+      await pool.query("ALTER TABLE users ADD COLUMN reset_token VARCHAR(255) DEFAULT NULL");
+      await pool.query("ALTER TABLE users ADD COLUMN reset_expires DATETIME DEFAULT NULL");
+      console.log("Added reset_token and reset_expires columns to users table");
+    }
     if (columns.length === 0) {
-      await pool.query(
-        "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0"
-      );
+      await pool.query("ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0");
       console.log("Added rating column to properties table");
     }
 
     // Ensure totalPrice column exists in bookings table
-    const [bookingColumns] = await pool.query(
-      "SHOW COLUMNS FROM bookings LIKE 'totalPrice'"
-    );
+    const [bookingColumns] = await pool.query("SHOW COLUMNS FROM bookings LIKE 'totalPrice'");
     if (bookingColumns.length === 0) {
-      await pool.query(
-        "ALTER TABLE bookings ADD COLUMN totalPrice DECIMAL(10,2) DEFAULT 0"
-      );
+      await pool.query("ALTER TABLE bookings ADD COLUMN totalPrice DECIMAL(10,2) DEFAULT 0");
       console.log("Added totalPrice column to bookings table");
     }
   } catch (err) {
@@ -110,13 +108,7 @@ const ensureSchema = async () => {
 };
 ensureSchema();
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+
 
 // Middleware
 const authMiddleware = async (req, res, next) => {
@@ -247,6 +239,78 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// Email Transporter Configuration
+const transporter = nodemailer.createTransport({
+  host: "mail.afrisoftware.et",
+  port: 465,
+  secure: true, // true for 465, false for other ports
+  auth: {
+    user: "app@afrisoftware.et",
+    pass: process.env.SMTP_PASS, // User must set this env var
+  },
+});
+
+// Forgot Password - Generate OTP
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const [users] = await pool.query("SELECT * FROM users WHERE email = ?", [
+      email,
+    ]);
+    if (users.length === 0)
+      return res.status(404).json({ error: "User not found" });
+
+    // Generate 6 digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 3600000); // 1 hour
+
+    await pool.query(
+      "UPDATE users SET reset_token = ?, reset_expires = ? WHERE email = ?",
+      [otp, expires, email]
+    );
+
+    // Send Email
+    await transporter.sendMail({
+      from: '"Real Estate App" <app@afrisoftware.et>',
+      to: email,
+      subject: "Password Reset Code",
+      text: `Your password reset code is: ${otp}\nIt expires in 1 hour.`,
+    });
+
+    console.log(`[Email Sent] Password reset OTP for ${email}`);
+
+    res.json({ message: "OTP sent to email" });
+  } catch (err) {
+    console.error("Email Error:", err);
+    res.status(500).json({ error: "Failed to send email. please try again later." });
+  }
+});
+
+// Verify OTP and Reset Password
+app.post("/api/auth/verify-reset-password", async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+  try {
+    const [users] = await pool.query(
+      "SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_expires > NOW()",
+      [email, otp]
+    );
+
+    if (users.length === 0)
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await pool.query(
+      "UPDATE users SET password = ?, reset_token = NULL, reset_expires = NULL WHERE email = ?",
+      [hashedPassword, email]
+    );
+
+    res.json({ message: "Password reset successful" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET AGENT DETAILS (Client-side fetch)
 app.get("/api/users/:id/agent-details", async (req, res) => {
   try {
@@ -327,7 +391,7 @@ app.get("/api/properties", async (req, res) => {
         try {
           const parsed = JSON.parse(prop.images);
           images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch (e) {}
+        } catch (e) { }
       }
       return { ...prop, images };
     });
@@ -352,7 +416,7 @@ app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
         try {
           const parsed = JSON.parse(prop.images);
           images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch (e) {}
+        } catch (e) { }
       }
       return { ...prop, images };
     });
@@ -376,7 +440,7 @@ app.get("/api/properties/:id", async (req, res) => {
       try {
         const parsed = JSON.parse(rows[0].images);
         images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-      } catch (e) {}
+      } catch (e) { }
     }
     res.json({ ...rows[0], images });
   } catch (err) {
@@ -480,7 +544,7 @@ app.post(
           formattedImages = JSON.parse(rows[0].images).map(
             (img) => `${baseUrl}/uploads/${img}`
           );
-        } catch {}
+        } catch { }
       }
       res.status(201).json({
         message: "Property created successfully",
@@ -528,7 +592,7 @@ app.put(
             const parts = imgStr.split("/");
             return parts[parts.length - 1];
           });
-        } catch (e) {}
+        } catch (e) { }
       }
       if (req.files && req.files.length > 0) {
         const newFiles = req.files.map((f) => f.filename);
