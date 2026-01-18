@@ -253,11 +253,18 @@ app.post("/api/auth/login", async (req, res) => {
 // Reverting to Port 465 (SSL/TLS) as per user settings
 // Email Transporter Configuration
 // Using Gmail Service (Requires App Password)
+// Email Transporter Configuration
+// Using Custom Server on Port 587 (Non-SSL / STARTTLS)
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "mail.afrisoftware.et",
+  port: 587,
+  secure: false, // false for 587 (STARTTLS)
   auth: {
-    user: process.env.SMTP_USER, // Your Gmail address
-    pass: process.env.SMTP_PASS, // Your Gmail App Password
+    user: "app@afrisoftware.et",
+    pass: process.env.SMTP_PASS, // Use your email password here
+  },
+  tls: {
+    rejectUnauthorized: false, // Trust self-signed certs
   },
   debug: true,
   logger: true,
@@ -284,7 +291,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     // Send Email
     await transporter.sendMail({
-      from: `"Real Estate App" <${process.env.SMTP_USER}>`,
+      from: '"Real Estate App" <app@afrisoftware.et>',
       to: email,
       subject: "Password Reset Code",
       text: `Your password reset code is: ${otp}\nIt expires in 1 hour.`,
