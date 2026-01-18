@@ -93,6 +93,17 @@ const ensureSchema = async () => {
       );
       console.log("Added rating column to properties table");
     }
+
+    // Ensure totalPrice column exists in bookings table
+    const [bookingColumns] = await pool.query(
+      "SHOW COLUMNS FROM bookings LIKE 'totalPrice'"
+    );
+    if (bookingColumns.length === 0) {
+      await pool.query(
+        "ALTER TABLE bookings ADD COLUMN totalPrice DECIMAL(10,2) DEFAULT 0"
+      );
+      console.log("Added totalPrice column to bookings table");
+    }
   } catch (err) {
     console.error("Error ensuring database schema:", err);
   }
