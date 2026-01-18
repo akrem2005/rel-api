@@ -85,21 +85,33 @@ const ensureSchema = async () => {
 
     // Ensure rating column exists in properties table
     // Add reset_token and reset_expires to users if not valid
-    const [userCols] = await pool.query("SHOW COLUMNS FROM users LIKE 'reset_token'");
+    const [userCols] = await pool.query(
+      "SHOW COLUMNS FROM users LIKE 'reset_token'"
+    );
     if (userCols.length === 0) {
-      await pool.query("ALTER TABLE users ADD COLUMN reset_token VARCHAR(255) DEFAULT NULL");
-      await pool.query("ALTER TABLE users ADD COLUMN reset_expires DATETIME DEFAULT NULL");
+      await pool.query(
+        "ALTER TABLE users ADD COLUMN reset_token VARCHAR(255) DEFAULT NULL"
+      );
+      await pool.query(
+        "ALTER TABLE users ADD COLUMN reset_expires DATETIME DEFAULT NULL"
+      );
       console.log("Added reset_token and reset_expires columns to users table");
     }
     if (columns.length === 0) {
-      await pool.query("ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0");
+      await pool.query(
+        "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0"
+      );
       console.log("Added rating column to properties table");
     }
 
     // Ensure totalPrice column exists in bookings table
-    const [bookingColumns] = await pool.query("SHOW COLUMNS FROM bookings LIKE 'totalPrice'");
+    const [bookingColumns] = await pool.query(
+      "SHOW COLUMNS FROM bookings LIKE 'totalPrice'"
+    );
     if (bookingColumns.length === 0) {
-      await pool.query("ALTER TABLE bookings ADD COLUMN totalPrice DECIMAL(10,2) DEFAULT 0");
+      await pool.query(
+        "ALTER TABLE bookings ADD COLUMN totalPrice DECIMAL(10,2) DEFAULT 0"
+      );
       console.log("Added totalPrice column to bookings table");
     }
   } catch (err) {
@@ -107,8 +119,6 @@ const ensureSchema = async () => {
   }
 };
 ensureSchema();
-
-
 
 // Middleware
 const authMiddleware = async (req, res, next) => {
@@ -282,7 +292,9 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     res.json({ message: "OTP sent to email" });
   } catch (err) {
     console.error("Email Error:", err);
-    res.status(500).json({ error: "Failed to send email. please try again later." });
+    res
+      .status(500)
+      .json({ error: "Failed to send email. please try again later." });
   }
 });
 
@@ -391,7 +403,7 @@ app.get("/api/properties", async (req, res) => {
         try {
           const parsed = JSON.parse(prop.images);
           images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch (e) { }
+        } catch (e) {}
       }
       return { ...prop, images };
     });
@@ -416,7 +428,7 @@ app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
         try {
           const parsed = JSON.parse(prop.images);
           images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-        } catch (e) { }
+        } catch (e) {}
       }
       return { ...prop, images };
     });
@@ -440,7 +452,7 @@ app.get("/api/properties/:id", async (req, res) => {
       try {
         const parsed = JSON.parse(rows[0].images);
         images = parsed.map((img) => `${baseUrl}/uploads/${img}`);
-      } catch (e) { }
+      } catch (e) {}
     }
     res.json({ ...rows[0], images });
   } catch (err) {
@@ -544,7 +556,7 @@ app.post(
           formattedImages = JSON.parse(rows[0].images).map(
             (img) => `${baseUrl}/uploads/${img}`
           );
-        } catch { }
+        } catch {}
       }
       res.status(201).json({
         message: "Property created successfully",
@@ -592,7 +604,7 @@ app.put(
             const parts = imgStr.split("/");
             return parts[parts.length - 1];
           });
-        } catch (e) { }
+        } catch (e) {}
       }
       if (req.files && req.files.length > 0) {
         const newFiles = req.files.map((f) => f.filename);
