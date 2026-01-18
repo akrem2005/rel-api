@@ -250,13 +250,17 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 // Email Transporter Configuration
+// Attempting Port 587 (STARTTLS) to resolve timeout on 465
 const transporter = nodemailer.createTransport({
   host: "mail.afrisoftware.et",
-  port: 465,
-  secure: true, // true for 465, false for other ports
+  port: 587,
+  secure: false, // true for 465, false for other ports
   auth: {
     user: "app@afrisoftware.et",
-    pass: process.env.SMTP_PASS, // User must set this env var
+    pass: process.env.SMTP_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false, // Helps with self-signed certs if any
   },
 });
 
