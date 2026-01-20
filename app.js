@@ -1089,6 +1089,68 @@ app.put(
   },
 );
 
+app.get("/api/dashboard/stats", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const role = req.user.role;
+
+    // 1. Monthly Bookings (Current Year)
+    let bookingsQuery = `
+      SELECT MONTH(createdAt) as month, COUNT(*) as count 
+      FROM bookings 
+      WHERE YEAR(createdAt) = YEAR(CURDATE())
+    `;
+    let bookingsParams = [];
+
+    if (role !== "admin") {
+      bookingsQuery += ` AND propertyId IN (SELECT id FROM properties WHERE ownerId = ?)`;
+      bookingsParams.push(userId);
+    }
+    bookingsQuery += ` GROUP BY month ORDER BY month`;
+
+    const [monthlyBookings] = await pool.query(bookingsQuery, bookingsParams);
+
+    // 2. Property Categories Distribution
+    let categoriesQuery = `
+      SELECT category, COUNT(*) as count 
+      FROM properties
+    `;
+    let categoriesParams = [];
+
+    if (role !== "admin") {
+      categoriesQuery += ` WHERE ownerId = ?`;
+      categoriesParams.push(userId);
+    }
+    categoriesQuery += ` GROUP BY category`;
+
+    const [categoryStats] = await pool.query(categoriesQuery, categoriesParams);
+
+    // 3. Overall Stats (Counts)
+    const [propCount] = await pool.query(
+      role === "admin"
+        ? "SELECT COUNT(*) as count FROM properties"
+        : "SELECT COUNT(*) as count FROM properties WHERE ownerId = ?",
+      role === "admin" ? [] : [userId],
+    );
+
+    const [bookCount] = await pool.query(
+      role === "admin"
+        ? "SELECT COUNT(*) as count FROM bookings"
+        : "SELECT COUNT(*) as count FROM bookings WHERE propertyId IN (SELECT id FROM properties WHERE ownerId = ?)",
+      role === "admin" ? [] : [userId],
+    );
+
+    res.json({
+      monthlyBookings,
+      categoryStats,
+      totalProperties: propCount[0].count,
+      totalBookings: bookCount[0].count,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Real Estate API running on http://localhost:${port}`);
 });
