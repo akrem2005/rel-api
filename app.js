@@ -9,9 +9,11 @@ const multer = require("multer");
 const nodemailer = require("nodemailer");
 const path = require("path");
 const fs = require("fs");
+const cors = require("cors");
 require("dotenv").config();
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
+app.use(cors());
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
 
@@ -43,14 +45,14 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const extname = allowedTypes.test(
-      path.extname(file.originalname).toLowerCase()
+      path.extname(file.originalname).toLowerCase(),
     );
     const mimetype = allowedTypes.test(file.mimetype);
     if (mimetype && extname) {
       cb(null, true);
     } else {
       cb(
-        new Error("Only image files (jpeg, jpg, png, gif, webp) are allowed!")
+        new Error("Only image files (jpeg, jpg, png, gif, webp) are allowed!"),
       );
     }
   },
@@ -86,35 +88,57 @@ const ensureSchema = async () => {
     // Ensure rating column exists in properties table
     // Add reset_token and reset_expires to users if not valid
     const [userCols] = await pool.query(
-      "SHOW COLUMNS FROM users LIKE 'reset_token'"
+      "SHOW COLUMNS FROM users LIKE 'reset_token'",
     );
     if (userCols.length === 0) {
       await pool.query(
-        "ALTER TABLE users ADD COLUMN reset_token VARCHAR(255) DEFAULT NULL"
+        "ALTER TABLE users ADD COLUMN reset_token VARCHAR(255) DEFAULT NULL",
       );
       await pool.query(
-        "ALTER TABLE users ADD COLUMN reset_expires DATETIME DEFAULT NULL"
+        "ALTER TABLE users ADD COLUMN reset_expires DATETIME DEFAULT NULL",
       );
       console.log("Added reset_token and reset_expires columns to users table");
     }
 
+    // Add profile columns if they don't exist
+    const [profileCols] = await pool.query("SHOW COLUMNS FROM users");
+    const existingCols = profileCols.map((c) => c.Field);
+    if (!existingCols.includes("bio"))
+      await pool.query("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT NULL");
+    if (!existingCols.includes("phone"))
+      await pool.query(
+        "ALTER TABLE users ADD COLUMN phone VARCHAR(20) DEFAULT NULL",
+      );
+    if (!existingCols.includes("location"))
+      await pool.query(
+        "ALTER TABLE users ADD COLUMN location VARCHAR(255) DEFAULT NULL",
+      );
+    if (!existingCols.includes("avatar"))
+      await pool.query(
+        "ALTER TABLE users ADD COLUMN avatar VARCHAR(255) DEFAULT NULL",
+      );
+    if (!existingCols.includes("social_links"))
+      await pool.query(
+        "ALTER TABLE users ADD COLUMN social_links JSON DEFAULT NULL",
+      );
+
     const [columns] = await pool.query(
-      "SHOW COLUMNS FROM properties LIKE 'rating'"
+      "SHOW COLUMNS FROM properties LIKE 'rating'",
     );
     if (columns.length === 0) {
       await pool.query(
-        "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0"
+        "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0",
       );
       console.log("Added rating column to properties table");
     }
 
     // Ensure totalPrice column exists in bookings table
     const [bookingColumns] = await pool.query(
-      "SHOW COLUMNS FROM bookings LIKE 'totalPrice'"
+      "SHOW COLUMNS FROM bookings LIKE 'totalPrice'",
     );
     if (bookingColumns.length === 0) {
       await pool.query(
-        "ALTER TABLE bookings ADD COLUMN totalPrice DECIMAL(10,2) DEFAULT 0"
+        "ALTER TABLE bookings ADD COLUMN totalPrice DECIMAL(10,2) DEFAULT 0",
       );
       console.log("Added totalPrice column to bookings table");
     }
@@ -146,7 +170,7 @@ const adminMiddleware = (req, res, next) => {
 const ownerMiddleware = async (req, res, next) => {
   const [rows] = await pool.query(
     "SELECT ownerId FROM properties WHERE id = ?",
-    [req.params.id]
+    [req.params.id],
   );
   // Use loose equality (==) to handle string/number differences
   if (rows.length === 0 || rows[0].ownerId != req.user.id) {
@@ -164,7 +188,7 @@ const subscriptionMiddleware = async (req, res, next) => {
        JOIN subscription_plans sp ON us.planId = sp.id
        WHERE us.userId = ? AND us.is_active = TRUE
        LIMIT 1`,
-      [req.user.id]
+      [req.user.id],
     );
     if (subs.length === 0) {
       return res
@@ -209,11 +233,11 @@ app.post("/api/auth/register", async (req, res) => {
     const hashed = await bcrypt.hash(password, 10);
     const [result] = await pool.query(
       "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
-      [name, email, hashed, role]
+      [name, email, hashed, role],
     );
     const token = jwt.sign(
       { id: result.insertId, role },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
     );
     res.json({
       token,
@@ -237,7 +261,7 @@ app.post("/api/auth/login", async (req, res) => {
     if (!valid) return res.status(400).json({ error: "Invalid credentials" });
     const token = jwt.sign(
       { id: user.id, role: user.role },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
     );
     res.json({
       token,
@@ -290,7 +314,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     await pool.query(
       "UPDATE users SET reset_token = ?, reset_expires = ? WHERE email = ?",
-      [otp, expires, email]
+      [otp, expires, email],
     );
 
     // Send Email
@@ -318,7 +342,7 @@ app.post("/api/auth/verify-reset-password", async (req, res) => {
   try {
     const [users] = await pool.query(
       "SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_expires > NOW()",
-      [email, otp]
+      [email, otp],
     );
 
     if (users.length === 0)
@@ -328,7 +352,7 @@ app.post("/api/auth/verify-reset-password", async (req, res) => {
 
     await pool.query(
       "UPDATE users SET password = ?, reset_token = NULL, reset_expires = NULL WHERE email = ?",
-      [hashedPassword, email]
+      [hashedPassword, email],
     );
 
     res.json({ message: "Password reset successful" });
@@ -344,7 +368,7 @@ app.get("/api/users/:id/agent-details", async (req, res) => {
     // Fetch user basic info
     const [users] = await pool.query(
       "SELECT id, name, email, role FROM users WHERE id = ?",
-      [userId]
+      [userId],
     );
     if (users.length === 0)
       return res.status(404).json({ error: "User not found" });
@@ -352,7 +376,7 @@ app.get("/api/users/:id/agent-details", async (req, res) => {
     // Calculate average rating for this agent (across all their properties)
     const [ratingResult] = await pool.query(
       "SELECT AVG(rating) as agentRating FROM properties WHERE ownerId = ?",
-      [userId]
+      [userId],
     );
     const agentRating = ratingResult[0].agentRating || 0;
     res.json({
@@ -433,7 +457,7 @@ app.get("/api/properties/my-listings", authMiddleware, async (req, res) => {
     const userId = req.user.id;
     const [rows] = await pool.query(
       "SELECT p.*, u.name as ownerName, (SELECT AVG(rating) FROM reviews WHERE propertyId = p.id) as rating, (SELECT COUNT(*) FROM reviews WHERE propertyId = p.id) as reviewCount FROM properties p JOIN users u ON p.ownerId = u.id WHERE p.ownerId = ?",
-      [userId]
+      [userId],
     );
     const baseUrl = `${req.protocol}://${req.get("host")}`;
     const formatted = rows.map((prop) => {
@@ -457,7 +481,7 @@ app.get("/api/properties/:id", async (req, res) => {
   try {
     const [rows] = await pool.query(
       "SELECT p.*, u.name as ownerName, (SELECT AVG(rating) FROM reviews WHERE propertyId = p.id) as rating, (SELECT COUNT(*) FROM reviews WHERE propertyId = p.id) as reviewCount FROM properties p JOIN users u ON p.ownerId = u.id WHERE p.id = ?",
-      [req.params.id]
+      [req.params.id],
     );
     if (rows.length === 0) return res.status(404).json({ error: "Not found" });
     const baseUrl = `${req.protocol}://${req.get("host")}`;
@@ -515,7 +539,7 @@ app.post(
         }
         await pool.query(
           "UPDATE user_subscriptions SET credits_remaining = credits_remaining - 1 WHERE id = ?",
-          [req.subscription.id]
+          [req.subscription.id],
         );
       }
       const [result] = await pool.query(
@@ -558,7 +582,7 @@ app.post(
           roomQuota,
           ownerId,
           isVerified,
-        ]
+        ],
       );
       const [rows] = await pool.query("SELECT * FROM properties WHERE id = ?", [
         result.insertId,
@@ -568,7 +592,7 @@ app.post(
       if (rows[0].images) {
         try {
           formattedImages = JSON.parse(rows[0].images).map(
-            (img) => `${baseUrl}/uploads/${img}`
+            (img) => `${baseUrl}/uploads/${img}`,
           );
         } catch {}
       }
@@ -583,7 +607,7 @@ app.post(
       console.error("Error creating property:", err);
       res.status(500).json({ error: "Server error" });
     }
-  }
+  },
 );
 
 app.put(
@@ -647,13 +671,13 @@ app.put(
           maxGuests || null,
           imagesJson,
           propertyId,
-        ]
+        ],
       );
       res.json({ message: "Property updated successfully" });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
-  }
+  },
 );
 
 // RATE PROPERTY
@@ -667,22 +691,22 @@ app.post("/api/properties/:id/rate", authMiddleware, async (req, res) => {
   try {
     const [existing] = await pool.query(
       "SELECT * FROM reviews WHERE propertyId = ? AND userId = ?",
-      [propertyId, userId]
+      [propertyId, userId],
     );
     if (existing.length > 0) {
       await pool.query(
         "UPDATE reviews SET rating = ?, comment = ?, createdAt = CURRENT_TIMESTAMP WHERE id = ?",
-        [rating, comment || null, existing[0].id]
+        [rating, comment || null, existing[0].id],
       );
     } else {
       await pool.query(
         "INSERT INTO reviews (propertyId, userId, rating, comment) VALUES (?, ?, ?, ?)",
-        [propertyId, userId, rating, comment || null]
+        [propertyId, userId, rating, comment || null],
       );
     }
     const [avgResult] = await pool.query(
       "SELECT AVG(rating) as avgRating FROM reviews WHERE propertyId = ?",
-      [propertyId]
+      [propertyId],
     );
     const newRating = avgResult[0].avgRating || 0;
 
@@ -703,7 +727,7 @@ app.get("/api/properties/:id/ratings", async (req, res) => {
   try {
     const [rows] = await pool.query(
       "SELECT r.*, u.name as userName FROM reviews r JOIN users u ON r.userId = u.id WHERE r.propertyId = ? ORDER BY r.createdAt DESC",
-      [req.params.id]
+      [req.params.id],
     );
     res.json(rows);
   } catch (err) {
@@ -720,7 +744,7 @@ app.delete(
     try {
       const [prop] = await pool.query(
         "SELECT images FROM properties WHERE id = ?",
-        [req.params.id]
+        [req.params.id],
       );
       if (prop.length > 0 && prop[0].images) {
         const images = JSON.parse(prop[0].images);
@@ -736,7 +760,7 @@ app.delete(
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
-  }
+  },
 );
 
 app.post("/api/bookings", authMiddleware, async (req, res) => {
@@ -754,7 +778,7 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
       const [overlap] = await pool.query(
         `SELECT COUNT(*) as count FROM bookings 
          WHERE propertyId = ? AND NOT (checkOutDate <= ? OR checkInDate >= ?)`,
-        [propertyId, checkInDate, checkOutDate]
+        [propertyId, checkInDate, checkOutDate],
       );
       if (overlap[0].count >= property.roomQuota) {
         return res
@@ -772,23 +796,23 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
         guestsCount,
         paymentMethod,
         req.body.totalPrice || property.price,
-      ]
+      ],
     );
     const [sub] = await pool.query(
       "SELECT sp.revenue_share_percent FROM user_subscriptions us JOIN subscription_plans sp ON us.planId = sp.id WHERE us.userId = ? AND us.is_active = TRUE",
-      [property.ownerId]
+      [property.ownerId],
     );
     if (sub.length > 0 && sub[0].revenue_share_percent > 0) {
       const percent = sub[0].revenue_share_percent;
       const commission = (property.price * percent) / 100;
       await pool.query(
         "INSERT INTO booking_commissions (bookingId, hotelId, commission_amount, percentage) VALUES (?, ?, ?, ?)",
-        [bookingResult.insertId, property.ownerId, commission, percent]
+        [bookingResult.insertId, property.ownerId, commission, percent],
       );
     }
     await pool.query(
       "INSERT INTO notifications (userId, message) VALUES (?, ?)",
-      [property.ownerId, `New booking for ${property.name}`]
+      [property.ownerId, `New booking for ${property.name}`],
     );
     res.status(201).json({ message: "Booking successful" });
   } catch (err) {
@@ -802,7 +826,7 @@ app.get("/api/bookings/my-bookings", authMiddleware, async (req, res) => {
      FROM bookings b 
      JOIN properties p ON b.propertyId = p.id 
      WHERE b.userId = ?`,
-    [req.user.id]
+    [req.user.id],
   );
   res.json(rows);
 });
@@ -813,7 +837,7 @@ app.get("/api/bookings/my-properties", authMiddleware, async (req, res) => {
      FROM bookings b 
      JOIN properties p ON b.propertyId = p.id 
      WHERE p.ownerId = ?`,
-    [req.user.id]
+    [req.user.id],
   );
   res.json(rows);
 });
@@ -822,7 +846,7 @@ app.get("/api/bookings/my-properties", authMiddleware, async (req, res) => {
 app.get("/api/favorites", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT p.* FROM properties p JOIN favorites f ON p.id = f.propertyId WHERE f.userId = ?`,
-    [req.user.id]
+    [req.user.id],
   );
   res.json(rows);
 });
@@ -830,7 +854,7 @@ app.get("/api/favorites", authMiddleware, async (req, res) => {
 app.post("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
   await pool.query(
     "INSERT IGNORE INTO favorites (userId, propertyId) VALUES (?, ?)",
-    [req.user.id, req.params.propertyId]
+    [req.user.id, req.params.propertyId],
   );
   res.json({ message: "Added to favorites" });
 });
@@ -838,7 +862,7 @@ app.post("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
 app.delete("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
   await pool.query(
     "DELETE FROM favorites WHERE userId = ? AND propertyId = ?",
-    [req.user.id, req.params.propertyId]
+    [req.user.id, req.params.propertyId],
   );
   res.json({ message: "Removed from favorites" });
 });
@@ -846,19 +870,63 @@ app.delete("/api/favorites/:propertyId", authMiddleware, async (req, res) => {
 // 5. Profile & Notifications
 app.get("/api/profile", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
-    "SELECT id, name, email, role FROM users WHERE id = ?",
-    [req.user.id]
+    "SELECT id, name, email, role, bio, phone, location, avatar, social_links FROM users WHERE id = ?",
+    [req.user.id],
   );
   res.json(rows[0]);
 });
 
+app.put(
+  "/api/profile",
+  authMiddleware,
+  upload.single("avatar"),
+  async (req, res) => {
+    const { name, bio, phone, location, social_links } = req.body;
+    const userId = req.user.id;
+    let avatar = req.body.avatar;
+
+    if (req.file) {
+      avatar = req.file.filename;
+    }
+
+    try {
+      await pool.query(
+        "UPDATE users SET name=?, bio=?, phone=?, location=?, avatar=?, social_links=? WHERE id=?",
+        [name, bio, phone, location, avatar, social_links, userId],
+      );
+      res.json({ message: "Profile updated successfully", avatar });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 app.get("/api/notifications", authMiddleware, async (req, res) => {
   const [rows] = await pool.query(
     "SELECT * FROM notifications WHERE userId = ? ORDER BY createdAt DESC",
-    [req.user.id]
+    [req.user.id],
   );
   res.json(rows);
 });
+
+app.post(
+  "/api/admin/broadcast-notification",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const { message } = req.body;
+    try {
+      const [users] = await pool.query("SELECT id FROM users");
+      const notifications = users.map((u) => [u.id, message]);
+      await pool.query("INSERT INTO notifications (userId, message) VALUES ?", [
+        notifications,
+      ]);
+      res.json({ message: "Notification broadcasted successfully" });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
 
 app.get("/api/my-subscription", authMiddleware, async (req, res) => {
   if (["user", "admin"].includes(req.user.role)) return res.json(null);
@@ -867,7 +935,7 @@ app.get("/api/my-subscription", authMiddleware, async (req, res) => {
      FROM user_subscriptions us
      JOIN subscription_plans sp ON us.planId = sp.id
      WHERE us.userId = ? AND us.is_active = TRUE`,
-    [req.user.id]
+    [req.user.id],
   );
   res.json(rows[0] || null);
 });
@@ -879,7 +947,7 @@ app.get(
   async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM subscription_plans");
     res.json(rows);
-  }
+  },
 );
 
 app.post(
@@ -906,10 +974,10 @@ app.post(
         listing_credits,
         free_months,
         description,
-      ]
+      ],
     );
     res.status(201).json({ message: "Plan created" });
-  }
+  },
 );
 
 app.post(
@@ -920,21 +988,21 @@ app.post(
     const { userId, planId } = req.body;
     const [plan] = await pool.query(
       "SELECT * FROM subscription_plans WHERE id = ?",
-      [planId]
+      [planId],
     );
     if (plan.length === 0)
       return res.status(404).json({ error: "Plan not found" });
     await pool.query(
       "UPDATE user_subscriptions SET is_active = FALSE WHERE userId = ?",
-      [userId]
+      [userId],
     );
     const startDate = new Date().toISOString().slice(0, 10);
     await pool.query(
       'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status) VALUES (?, ?, ?, ?, "free_trial")',
-      [userId, planId, startDate, plan[0].listing_credits]
+      [userId, planId, startDate, plan[0].listing_credits],
     );
     res.json({ message: "Subscription assigned with free trial" });
-  }
+  },
 );
 
 app.post("/api/apply", async (req, res) => {
@@ -944,7 +1012,7 @@ app.post("/api/apply", async (req, res) => {
   try {
     await pool.query(
       "INSERT IGNORE INTO applications (name, email, role) VALUES (?, ?, ?)",
-      [name, email, role]
+      [name, email, role],
     );
     res.json({ message: "Application submitted" });
   } catch (err) {
@@ -958,10 +1026,29 @@ app.get(
   adminMiddleware,
   async (req, res) => {
     const [rows] = await pool.query(
-      'SELECT * FROM applications WHERE status = "pending"'
+      'SELECT * FROM applications WHERE status = "pending"',
     );
     res.json(rows);
-  }
+  },
+);
+
+app.get(
+  "/api/admin/bookings",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    try {
+      const [rows] = await pool.query(
+        `SELECT b.*, p.name as propertyName, p.images as propertyImages, u.name as guestName 
+         FROM bookings b 
+         JOIN properties p ON b.propertyId = p.id 
+         JOIN users u ON b.userId = u.id`,
+      );
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
 );
 
 app.put(
@@ -973,7 +1060,7 @@ app.put(
     const { planId } = req.body;
     const [app] = await pool.query(
       'SELECT * FROM applications WHERE id = ? AND status = "pending"',
-      [id]
+      [id],
     );
     if (app.length === 0)
       return res.status(400).json({ error: "Invalid application" });
@@ -981,17 +1068,17 @@ app.put(
     const hashed = await bcrypt.hash(password, 10);
     const [userResult] = await pool.query(
       "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
-      [app[0].name, app[0].email, hashed, app[0].role]
+      [app[0].name, app[0].email, hashed, app[0].role],
     );
     if (planId) {
       await pool.query(
         'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status) VALUES (?, ?, CURDATE(), (SELECT listing_credits FROM subscription_plans WHERE id = ?), "free_trial")',
-        [userResult.insertId, planId, planId]
+        [userResult.insertId, planId, planId],
       );
     }
     await pool.query(
       'UPDATE applications SET status = "approved" WHERE id = ?',
-      [id]
+      [id],
     );
     transporter.sendMail({
       to: app[0].email,
@@ -999,7 +1086,7 @@ app.put(
       text: `Welcome! Your account has been approved.\nEmail: ${app[0].email}\nPassword: ${password}\nPlease change your password after login.`,
     });
     res.json({ message: "User created and notified" });
-  }
+  },
 );
 
 app.listen(port, () => {
