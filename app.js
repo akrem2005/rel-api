@@ -99,32 +99,6 @@ const ensureSchema = async () => {
       );
       console.log("Added reset_token and reset_expires columns to users table");
     }
-
-    // Add profile columns if they don't exist
-    const [profileCols] = await pool.query("SHOW COLUMNS FROM users");
-    const existingCols = profileCols.map((c) => c.Field);
-    if (!existingCols.includes("bio"))
-      await pool.query("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT NULL");
-    if (!existingCols.includes("phone"))
-      await pool.query(
-        "ALTER TABLE users ADD COLUMN phone VARCHAR(20) DEFAULT NULL",
-      );
-    if (!existingCols.includes("location"))
-      await pool.query(
-        "ALTER TABLE users ADD COLUMN location VARCHAR(255) DEFAULT NULL",
-      );
-    if (!existingCols.includes("avatar"))
-      await pool.query(
-        "ALTER TABLE users ADD COLUMN avatar VARCHAR(255) DEFAULT NULL",
-      );
-    if (!existingCols.includes("social_links"))
-      await pool.query(
-        "ALTER TABLE users ADD COLUMN social_links JSON DEFAULT NULL",
-      );
-
-    const [columns] = await pool.query(
-      "SHOW COLUMNS FROM properties LIKE 'rating'",
-    );
     if (columns.length === 0) {
       await pool.query(
         "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0",
