@@ -162,6 +162,30 @@ const ensureSchema = async () => {
       )
     `);
     console.log("Subscription and Application tables ready");
+
+    // Ensure status column exists in bookings table
+    const [bookingStatusCols] = await pool.query(
+      "SHOW COLUMNS FROM bookings LIKE 'status'",
+    );
+    if (bookingStatusCols.length === 0) {
+      await pool.query(
+        "ALTER TABLE bookings ADD COLUMN status ENUM('pending', 'confirmed', 'cancelled', 'completed') DEFAULT 'pending'",
+      );
+      console.log("Added status column to bookings table");
+    }
+
+    // Ensure notifications table exists
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        userId INT NOT NULL,
+        message TEXT NOT NULL,
+        isRead BOOLEAN DEFAULT FALSE,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    console.log("Notifications table ready");
   } catch (err) {
     console.error("Error ensuring database schema:", err);
   }
@@ -807,7 +831,7 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
       }
     }
     const [bookingResult] = await pool.query(
-      "INSERT INTO bookings (propertyId, userId, checkInDate, checkOutDate, guestsCount, paymentMethod, totalPrice) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO bookings (propertyId, userId, checkInDate, checkOutDate, guestsCount, paymentMethod, totalPrice, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
       [
         propertyId,
         userId,
@@ -835,6 +859,92 @@ app.post("/api/bookings", authMiddleware, async (req, res) => {
       [property.ownerId, `New booking for ${property.name}`],
     );
     res.status(201).json({ message: "Booking successful" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/bookings/:id/status", authMiddleware, async (req, res) => {
+  const { status } = req.body;
+  const bookingId = req.params.id;
+  const userId = req.user.id;
+
+  if (!["pending", "confirmed", "cancelled", "completed"].includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT b.*, p.name as propertyName, p.ownerId 
+       FROM bookings b 
+       JOIN properties p ON b.propertyId = p.id 
+       WHERE b.id = ?`,
+      [bookingId],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    const booking = rows[0];
+
+    // Only allow owner or admin to confirm/complete
+    if (
+      ["confirmed", "completed"].includes(status) &&
+      req.user.role !== "admin" &&
+      booking.ownerId != userId
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Only the property owner can update this status" });
+    }
+
+    // Allow owner, user who booked, or admin to cancel
+    if (
+      status === "cancelled" &&
+      req.user.role !== "admin" &&
+      booking.ownerId != userId &&
+      booking.userId != userId
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Unauthorized to cancel this booking" });
+    }
+
+    await pool.query("UPDATE bookings SET status = ? WHERE id = ?", [
+      status,
+      bookingId,
+    ]);
+
+    // Notify the user if status changed
+    let notificationMsg = "";
+    if (status === "confirmed") {
+      notificationMsg = `Your booking for ${booking.propertyName || "the property"} has been confirmed!`;
+    } else if (status === "cancelled") {
+      notificationMsg = `The booking for ${booking.propertyName || "the property"} has been cancelled.`;
+    }
+
+    if (notificationMsg) {
+      // Notify the guest if owner cancelled/confirmed
+      if (booking.ownerId == userId || req.user.role === "admin") {
+        await pool.query(
+          "INSERT INTO notifications (userId, message) VALUES (?, ?)",
+          [booking.userId, notificationMsg],
+        );
+      }
+      // Notify the owner if guest cancelled
+      else if (booking.userId == userId) {
+        await pool.query(
+          "INSERT INTO notifications (userId, message) VALUES (?, ?)",
+          [
+            booking.ownerId,
+            `A guest cancelled their booking for ${booking.propertyName}`,
+          ],
+        );
+      }
+    }
+
+    res.json({ message: `Booking ${status} successfully` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
