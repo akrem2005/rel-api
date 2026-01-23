@@ -1189,7 +1189,7 @@ app.get(
   adminMiddleware,
   async (req, res) => {
     const [rows] = await pool.query(
-      'SELECT * FROM applications WHERE status = "pending"',
+      "SELECT * FROM applications ORDER BY id DESC",
     );
     res.json(rows);
   },
@@ -1220,18 +1220,43 @@ app.put(
   adminMiddleware,
   async (req, res) => {
     const { id } = req.params;
+    try {
+      const [result] = await pool.query(
+        'UPDATE applications SET status = "approved" WHERE id = ? AND status = "pending"',
+        [id],
+      );
+      if (result.affectedRows === 0) {
+        return res
+          .status(400)
+          .json({ error: "Invalid or already processed application" });
+      }
+      res.json({
+        message: "Application approved. You can now create the account.",
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+app.post(
+  "/api/admin/applications/:id/create-account",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const { id } = req.params;
     const { planId } = req.body;
 
     try {
       const [applications] = await pool.query(
-        'SELECT * FROM applications WHERE id = ? AND status = "pending"',
+        'SELECT * FROM applications WHERE id = ? AND status = "approved"',
         [id],
       );
 
       if (applications.length === 0) {
         return res
           .status(400)
-          .json({ error: "Invalid or already processed application" });
+          .json({ error: "Invalid or non-approved application" });
       }
 
       const application = applications[0];
@@ -1258,39 +1283,38 @@ app.put(
       const userId = userResult.insertId;
 
       if (planId) {
-        // Fetch listing credits from plan to ensure it exists
         const [plans] = await pool.query(
           "SELECT listing_credits FROM subscription_plans WHERE id = ?",
           [planId],
         );
         if (plans.length > 0) {
           await pool.query(
-            'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status, is_active) VALUES (?, ?, CURDATE(), ?, "free_trial", TRUE)',
+            'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status, is_active) VALUES (?, ?, CURDATE(), ?, "active", TRUE)',
             [userId, planId, plans[0].listing_credits],
           );
         }
       }
 
       await pool.query(
-        'UPDATE applications SET status = "approved" WHERE id = ?',
+        'UPDATE applications SET status = "completed" WHERE id = ?',
         [id],
       );
 
-      // Send Email (Don't await to avoid blocking response if email fails, but catch errors)
+      // Send Welcome Email
       transporter
         .sendMail({
           to: application.email,
-          subject: "Application Approved - Real Estate Portal",
-          text: `Welcome! Your account has been approved.\nEmail: ${application.email}\nPassword: ${password}\nPlease change your password after login.`,
+          subject: "Your Real Estate Partner Account is Ready",
+          text: `Hello ${application.name},\n\nYour partnership application has been approved and your account is now active.\n\nLogin Email: ${application.email}\nTemporary Password: ${password}\n\nPlease login and change your password immediately.\n\nBest regards,\nReal Estate Team`,
         })
-        .catch((err) => console.error("Failed to send approval email:", err));
+        .catch((e) => console.error("Email failed", e));
 
-      res.json({ message: "User created and notified" });
+      res.status(201).json({
+        message: "Account created successfully",
+        tempPassword: password,
+      });
     } catch (err) {
-      console.error("Approval Error:", err);
-      res
-        .status(500)
-        .json({ error: "Failed to approve application: " + err.message });
+      res.status(500).json({ error: err.message });
     }
   },
 );
