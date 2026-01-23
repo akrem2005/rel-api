@@ -99,6 +99,9 @@ const ensureSchema = async () => {
       );
       console.log("Added reset_token and reset_expires columns to users table");
     }
+    const [columns] = await pool.query(
+      "SHOW COLUMNS FROM properties LIKE 'rating'",
+    );
     if (columns.length === 0) {
       await pool.query(
         "ALTER TABLE properties ADD COLUMN rating DECIMAL(3,2) DEFAULT 0",
@@ -116,6 +119,49 @@ const ensureSchema = async () => {
       );
       console.log("Added totalPrice column to bookings table");
     }
+
+    // Ensure subscription tables exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS subscription_plans (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        role ENUM('agent', 'hotel') NOT NULL,
+        price_per_month DECIMAL(10,2) DEFAULT 0,
+        revenue_share_percent DECIMAL(5,2) DEFAULT 0,
+        listing_credits INT DEFAULT 0,
+        free_months INT DEFAULT 0,
+        description TEXT,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_subscriptions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        userId INT NOT NULL,
+        planId INT NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE,
+        credits_remaining INT DEFAULT 0,
+        payment_status VARCHAR(50) DEFAULT 'pending',
+        is_active BOOLEAN DEFAULT TRUE,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX (userId),
+        INDEX (planId)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS applications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        role ENUM('agent', 'hotel') NOT NULL,
+        status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log("Subscription and Application tables ready");
   } catch (err) {
     console.error("Error ensuring database schema:", err);
   }
@@ -972,7 +1018,7 @@ app.post(
     );
     const startDate = new Date().toISOString().slice(0, 10);
     await pool.query(
-      'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status) VALUES (?, ?, ?, ?, "free_trial")',
+      'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status, is_active) VALUES (?, ?, ?, ?, "free_trial", TRUE)',
       [userId, planId, startDate, plan[0].listing_credits],
     );
     res.json({ message: "Subscription assigned with free trial" });
@@ -1032,34 +1078,77 @@ app.put(
   async (req, res) => {
     const { id } = req.params;
     const { planId } = req.body;
-    const [app] = await pool.query(
-      'SELECT * FROM applications WHERE id = ? AND status = "pending"',
-      [id],
-    );
-    if (app.length === 0)
-      return res.status(400).json({ error: "Invalid application" });
-    const password = Math.random().toString(36).slice(-10);
-    const hashed = await bcrypt.hash(password, 10);
-    const [userResult] = await pool.query(
-      "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
-      [app[0].name, app[0].email, hashed, app[0].role],
-    );
-    if (planId) {
-      await pool.query(
-        'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status) VALUES (?, ?, CURDATE(), (SELECT listing_credits FROM subscription_plans WHERE id = ?), "free_trial")',
-        [userResult.insertId, planId, planId],
+
+    try {
+      const [applications] = await pool.query(
+        'SELECT * FROM applications WHERE id = ? AND status = "pending"',
+        [id],
       );
+
+      if (applications.length === 0) {
+        return res
+          .status(400)
+          .json({ error: "Invalid or already processed application" });
+      }
+
+      const application = applications[0];
+
+      // Check if user already exists
+      const [existingUsers] = await pool.query(
+        "SELECT id FROM users WHERE email = ?",
+        [application.email],
+      );
+      if (existingUsers.length > 0) {
+        return res
+          .status(400)
+          .json({ error: "A user with this email already exists" });
+      }
+
+      const password = Math.random().toString(36).slice(-10);
+      const hashed = await bcrypt.hash(password, 10);
+
+      const [userResult] = await pool.query(
+        "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
+        [application.name, application.email, hashed, application.role],
+      );
+
+      const userId = userResult.insertId;
+
+      if (planId) {
+        // Fetch listing credits from plan to ensure it exists
+        const [plans] = await pool.query(
+          "SELECT listing_credits FROM subscription_plans WHERE id = ?",
+          [planId],
+        );
+        if (plans.length > 0) {
+          await pool.query(
+            'INSERT INTO user_subscriptions (userId, planId, start_date, credits_remaining, payment_status, is_active) VALUES (?, ?, CURDATE(), ?, "free_trial", TRUE)',
+            [userId, planId, plans[0].listing_credits],
+          );
+        }
+      }
+
+      await pool.query(
+        'UPDATE applications SET status = "approved" WHERE id = ?',
+        [id],
+      );
+
+      // Send Email (Don't await to avoid blocking response if email fails, but catch errors)
+      transporter
+        .sendMail({
+          to: application.email,
+          subject: "Application Approved - Real Estate Portal",
+          text: `Welcome! Your account has been approved.\nEmail: ${application.email}\nPassword: ${password}\nPlease change your password after login.`,
+        })
+        .catch((err) => console.error("Failed to send approval email:", err));
+
+      res.json({ message: "User created and notified" });
+    } catch (err) {
+      console.error("Approval Error:", err);
+      res
+        .status(500)
+        .json({ error: "Failed to approve application: " + err.message });
     }
-    await pool.query(
-      'UPDATE applications SET status = "approved" WHERE id = ?',
-      [id],
-    );
-    transporter.sendMail({
-      to: app[0].email,
-      subject: "Application Approved - Real Estate Portal",
-      text: `Welcome! Your account has been approved.\nEmail: ${app[0].email}\nPassword: ${password}\nPlease change your password after login.`,
-    });
-    res.json({ message: "User created and notified" });
   },
 );
 
