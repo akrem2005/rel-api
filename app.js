@@ -1110,6 +1110,39 @@ app.post(
   },
 );
 
+app.delete(
+  "/api/admin/plans/:id",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    const { id } = req.params;
+    try {
+      // Check if plan is in use
+      const [inUse] = await pool.query(
+        "SELECT id FROM user_subscriptions WHERE planId = ? AND is_active = TRUE",
+        [id],
+      );
+      if (inUse.length > 0) {
+        return res.status(400).json({
+          error:
+            "Cannot delete plan. It is currently in use by active subscribers.",
+        });
+      }
+
+      const [result] = await pool.query(
+        "DELETE FROM subscription_plans WHERE id = ?",
+        [id],
+      );
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: "Plan not found" });
+      }
+      res.json({ message: "Plan deleted successfully" });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 app.post(
   "/api/admin/assign-subscription",
   authMiddleware,
