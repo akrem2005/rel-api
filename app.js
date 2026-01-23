@@ -1152,6 +1152,27 @@ app.put(
   },
 );
 
+app.delete(
+  "/api/admin/applications/:id",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [result] = await pool.query(
+        "DELETE FROM applications WHERE id = ?",
+        [id],
+      );
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: "Application not found" });
+      }
+      res.json({ message: "Application deleted successfully" });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 app.listen(port, () => {
   console.log(`Real Estate API running on http://localhost:${port}`);
 });
